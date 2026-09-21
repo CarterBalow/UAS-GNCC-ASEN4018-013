@@ -1,0 +1,108 @@
+function [Fc, Gc, int_dot] = ClosedLoopController(var, params, ref)
+% ClosedLoopController - Cascaded position -> velocity -> tilt/thrust outer
+% loop (x-axis), PD outer loop (y,z), and PID attitude inner loop, for the
+% nonlinear quadrotor.
+%
+% x-axis outer loop (cruise flight):
+%   u_cmd     = kpx_pos*(ref.x - xE), saturated to +/- ref.u_max
+%   xddot_des = -kpu*(uB - u_cmd) - kiu*xi_u      (PI velocity regulation)
+% This holds forward speed at ref.u_max while far from the target and
+% decelerates smoothly (P-with-saturation) as xE -> ref.x. The integral
+% term zeros out steady-state velocity error from drag/model bias.
+%
+% y, z outer loops: unchanged position/velocity PD.
+%
+% Inner loop: PID attitude, pole placement (unchanged).
+%   L = -kp*(phi-phi_ref) - kd*p - ki*integral(phi-phi_ref), etc.
+% ki corrects long-term bias in phi/theta (unmodeled moments, mixing
+% error) that a pure PD would leave as a persistent angle offset --
+% and since phi/theta directly set commanded acceleration (via g*theta),
+% an uncorrected attitude bias would show up as a permanent accel error.
+%
+% Sign convention matches QuadrotorEOM.m: hover trim Zc0 = -m*g.
+%
+% Inputs:
+%   var    - 21-element state: [12 real states, 6 unused Fc/Gc slots,
+%            xi_phi, xi_theta, xi_u]
+%   params - struct: m, g, Ix, Iy, Iz
+%   ref    - struct: x,y,z,v,w (setpoints), u_max, kpx_pos, kpu, kiu (x
+%            cruise loop), kpy,kdy,kpz,kdz (y/z PD)
+%
+% Outputs:
+%   Fc      - [0;0;Zc] control force (N)
+%   Gc      - [L;M;N] control moment (N*m)
+%   int_dot - [d/dt(xi_phi); d/dt(xi_theta); d/dt(xi_u)]
+
+m = params.m; g = params.g;
+Ix = params.Ix; Iy = params.Iy;
+
+xE = var(1); yE = var(2); zE = var(3);
+phi = var(4); theta = var(5);
+uB = var(7); vB = var(8); wB = var(9);
+p = var(10); q = var(11); r = var(12); 
+gamma = var(22); gamma_dot = var(23);
+xi_phi   = var(19);   % integral of roll-angle error
+xi_theta = var(20);   % integral of pitch-angle error
+xi_u     = var(21);   % integral of forward-velocity error
+gammai = var(24);
+
+% --- x: position -> velocity command (saturated at cruise speed) ---
+u_cmd = ref.kpx_pos * (ref.x - xE);
+u_cmd = max(min(u_cmd, ref.u_max), -ref.u_max);
+
+% --- x: PI velocity loop tracks u_cmd (zeros steady-state speed error) ---
+u_err = uB - u_cmd;
+xddot_des = -ref.kpu*u_err - ref.kiu*xi_u;
+
+% Anti-windup: while the required tilt exceeds tilt_limit, the vehicle
+% physically cannot produce the commanded accel, so freeze xi_u instead
+% of letting it keep integrating error it has no way to correct.
+theta_ref_raw = -xddot_des / g;
+x_saturated = abs(theta_ref_raw) >= deg2rad(30);
+if x_saturated
+    u_err_int = 0;
+else
+    u_err_int = u_err;
+end
+
+% --- y, z: position/velocity PD (unchanged) ---
+yddot_des = -ref.kpy*(yE - ref.y) - ref.kdy*(vB - ref.v);
+zddot_des = -ref.kpz*(zE - ref.z) - ref.kdz*(wB - ref.w);
+
+% --- Invert for tilt angle + thrust ---
+gamma_ref = xddot_des / g;
+phi_ref   =  yddot_des / g;
+
+% Clamp tilt commands to keep cos(theta_ref) well away from zero
+tilt_limit = deg2rad(30);
+gamma_ref = max(min(gamma_ref, tilt_limit), -tilt_limit);
+phi_ref   = max(min(phi_ref,   tilt_limit), -tilt_limit);
+
+Zc = (-m*g + m*zddot_des) / cos(theta_ref);
+Fc = [0; 0; Zc];
+
+% --- Inner loop: attitude PID, pole placement at lambda1,lambda2,lambda3 ---
+T1 = .5; T2 = .05; T3 = 1;
+lambda1 = -1/T1; lambda2 = -1/T2; lambda3 = -1/T3;
+
+kp_roll  = Ix*(lambda1*lambda2 + lambda1*lambda3 + lambda2*lambda3);
+kd_roll  = -Ix*(lambda1 + lambda2 + lambda3);
+ki_roll  = -Ix*lambda1*lambda2*lambda3;
+
+kp_pitch = Iy*(lambda1*lambda2 + lambda1*lambda3 + lambda2*lambda3);
+kd_pitch = -Iy*(lambda1 + lambda2 + lambda3);
+ki_pitch = -Iy*lambda1*lambda2*lambda3;
+
+k_yaw    = -.068*9.81*1e-4;  % unchanged (yaw damping only)
+
+phi_err   = phi   - phi_ref;
+theta_err = theta - theta_ref;
+
+L = -kp_roll*phi_err    - kd_roll*p  - ki_roll*xi_phi;
+M = -kp_pitch*theta_err - kd_pitch*q - ki_pitch*xi_theta;
+N = k_yaw*r;
+
+Gc = [L; M; N];
+int_dot = [phi_err; theta_err; u_err_int];
+
+end

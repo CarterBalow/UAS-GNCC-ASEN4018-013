@@ -1,0 +1,94 @@
+function var_dot  = QuadrotorEOM(t, var, g, m, I, d, km, nu, mu, motor_forces)
+
+%exact the varibles
+xE    = var(1);
+yE    = var(2);
+zE    = var(3);
+phi   = var(4);   % Roll
+theta = var(5);   % Pitch
+psi   = var(6);   % Yaw
+uB    = var(7);   % Body-frame velocity x
+vB    = var(8);   % Body-frame velocity y
+wB    = var(9);   % Body-frame velocity z
+p     = var(10);  % Roll rate
+q     = var(11);  % Pitch rate
+r     = var(12);  % Yaw rate
+
+% --- Extract inertia values ---
+Ix = I(1,1);
+Iy = I(2,2);
+Iz = I(3,3);
+% Ixz = 0 for symmetric quadrotor
+
+% --- Motor forces ---
+f1 = motor_forces(1);
+f2 = motor_forces(2);
+f3 = motor_forces(3);
+f4 = motor_forces(4);
+
+% --- Control forces and moments ---
+Zc = -(f1 + f2 + f3 + f4);
+Lc = (d/sqrt(2))*(-f1 - f2 + f3 + f4);
+Mc = (d/sqrt(2))*( f1 - f2 - f3 + f4);
+Nc = km*(f1 - f2 + f3 - f4);
+
+Fc = [0; 0; Zc];
+Gc = [Lc; Mc; Nc];
+
+% --- Aerodynamic drag forces and moments ---
+Xaero = -nu * uB * abs(uB);
+Yaero = -nu * vB * abs(vB);
+Zaero = -nu * wB * abs(wB);
+
+Laero = -mu * p * abs(p);
+Maero = -mu * q * abs(q);
+Naero = -mu * r * abs(r);
+
+% --- Total forces and moments in body frame ---
+X = Xaero; %% remove the % for part 2
+Y = Yaero;
+Z = Zc + Zaero;
+L = Lc + Laero;
+M = Mc + Maero;
+N = Nc + Naero;
+
+% --- Trig shorthands ---
+cphi   = cos(phi);   sphi   = sin(phi);
+ctheta = cos(theta); stheta = sin(theta);
+cpsi   = cos(psi);   spsi   = sin(psi);
+ttheta = tan(theta); stheta_sec = 1/ctheta; % sec(theta)
+
+% --- Position kinematics (inertial frame) ---
+xE_dot = (ctheta*cpsi)*uB + (sphi*stheta*cpsi - cphi*spsi)*vB + (cphi*stheta*cpsi + sphi*spsi)*wB;
+yE_dot = (ctheta*spsi)*uB + (sphi*stheta*spsi + cphi*cpsi)*vB + (cphi*stheta*spsi - sphi*cpsi)*wB;
+zE_dot = (-stheta)*uB    + (sphi*ctheta)*vB                   + (cphi*ctheta)*wB;
+
+% --- Euler angle kinematics ---
+phi_dot   = p + sphi*ttheta*q   + cphi*ttheta*r;
+theta_dot =     cphi*q          - sphi*r;
+psi_dot   =     sphi*stheta_sec*q + cphi*stheta_sec*r;
+
+% --- Translational dynamics (body frame, Newton's 2nd law) ---
+uB_dot = r*vB - q*wB + g*(-stheta)        + (1/m)*X; %get rid of % for part 2
+vB_dot = p*wB - r*uB + g*(ctheta*sphi)    + (1/m)*Y;
+wB_dot = q*uB - p*vB + g*(ctheta*cphi)    + (1/m)*Z;
+
+
+
+% --- Rotational dynamics (Euler's equations, Ixz = 0 for symmetric body) ---
+p_dot = (1/Ix)*(L + (Iy - Iz)*q*r);
+q_dot = (1/Iy)*(M + (Iz - Ix)*p*r);
+r_dot = (1/Iz)*(N + (Ix - Iy)*p*q);
+
+
+
+
+% --- Assemble state derivative vector ---
+var_dot = [xE_dot; yE_dot; zE_dot; ...
+           phi_dot; theta_dot; psi_dot; ...
+           uB_dot; vB_dot; wB_dot; ...
+           p_dot; q_dot; r_dot; Fc; Gc];
+
+
+
+end
