@@ -24,7 +24,16 @@ cfg.vMax = 0.5;
 
 cfg.landSpeed = 0.15;
 
-cfg.laneSpacing = 0.75;
+% Use the lower end of the selected cross-track FOV range.
+% The camera's wide image dimension must point across the lanes.
+cfg.cameraCrossTrackFOV = 75;   % Degrees
+cfg.cameraLaneOverlap = 0.20;  % Development assumption: 30%
+
+% Estimate ground coverage using camera height above flat ground.
+cfg.cameraFootprintWidth = 2*cfg.altitude*tand(cfg.cameraCrossTrackFOV/2);
+
+% Adjacent passes overlap instead of leaving gaps between footprints.
+cfg.laneSpacing = cfg.cameraFootprintWidth*(1-cfg.cameraLaneOverlap);
 
 cfg.ctrlTs = 0.02;
 
