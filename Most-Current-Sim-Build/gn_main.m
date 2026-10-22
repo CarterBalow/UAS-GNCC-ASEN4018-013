@@ -331,7 +331,7 @@ outs = find_system(block,'SearchDepth',1,'MatchFilter', ...
     @Simulink.match.allVariants,'BlockType','Outport');
 ports = get_param(block,'PortHandles');
 for k = 1:numel(outs)
-    name = get_param(outs{k},'Name');
+    name = regexprep(strtrim(get_param(outs{k},'Name')),'[<>]','');
     if any(strcmpi(name,aliases))
         index = str2double(get_param(outs{k},'Port'));
         port = ports.Outport(index);
@@ -341,7 +341,7 @@ end
 % Stateflow charts may have no visible internal Outport blocks. Their
 % external port names can still identify phase and target outputs.
 for k = 1:numel(ports.Outport)
-    name = get_param(ports.Outport(k),'Name');
+    name = regexprep(strtrim(get_param(ports.Outport(k),'Name')),'[<>]','');
     if any(strcmpi(name,aliases))
         port = ports.Outport(k);
         return
@@ -357,6 +357,8 @@ if isempty(port)
         blockName,strjoin(aliases,' / '),logName);
     return
 end
+% Keep runner-owned logs separate from the user's existing internal logs.
+logName = ['gnMain_' logName];
 % This changes only the logging properties of the output port.
 set_param(port,'DataLogging','on','DataLoggingNameMode','Custom', ...
     'DataLoggingName',logName,'DataLoggingDecimateData','off', ...
@@ -462,6 +464,11 @@ function [series,source] = gnReadSeries(simOut,candidates)
 % Find a named wire log or To Workspace output without external helpers.
 series = [];
 source = '';
+% Prefer the runner-owned boundary logs (including held ground samples).
+% Existing internal logs retain their original names and remain available.
+runnerCandidates = cellfun(@(name) ['gnMain_' name],candidates, ...
+    'UniformOutput',false);
+candidates = [runnerCandidates,candidates];
 outputNames = who(simOut);
 if any(strcmp(outputNames,'logsout'))
     dataset = simOut.logsout;
@@ -469,8 +476,22 @@ if any(strcmp(outputNames,'logsout'))
         names = getElementNames(dataset);
         for k = 1:numel(candidates)
             matches = find(strcmp(names,candidates{k}));
-            assert(numel(matches)<=1, ...
-                'Duplicate logging name %s. Assign unique names.',candidates{k});
+            if numel(matches)>1
+                % Virtual subsystem boundaries can expose the same signal
+                % more than once. Accept duplicates only when time and data
+                % are exactly equal; never select differing signals blindly.
+                first = getElement(dataset,matches(1));
+                for j = 2:numel(matches)
+                    other = getElement(dataset,matches(j));
+                    assert(isa(first.Values,'timeseries') && ...
+                        isa(other.Values,'timeseries') && ...
+                        isequaln(first.Values.Time,other.Values.Time) && ...
+                        isequaln(first.Values.Data,other.Values.Data), ...
+                        ['Different signals share logging name %s. ' ...
+                         'Inspect logsout and assign distinct custom names.'], ...
+                        candidates{k});
+                end
+            end
             if ~isempty(matches)
                 signal = getElement(dataset,matches(1));
                 series = signal.Values;
