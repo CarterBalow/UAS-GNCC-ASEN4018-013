@@ -1,0 +1,24 @@
+%% ----- Vehicles Parameters
+P.g  = 9.81;
+P.m  = 1.93637;
+P.Ix = 10.301e-5;
+P.Iy = 10.301e-5;
+P.Iz = 20.596e-5;
+P.I  = diag([P.Ix; P.Iy; P.Iz]);
+P.d  = .18785;              % arm length (m)
+P.km = .00734;            % motor torque constant
+P.nu = 1.0e-3;    % 1/2*rho*Cd*A, A = 0.002 m^2, Cd = 0.85
+P.mu = 2e-6;      % 1/2*rho*Cd*A*r^3, r = 0.154 m (between spread and tip bounds)            
+P.tilt_max = deg2rad(30);   % prop tilt limit, both axes (thrust vec only)
+
+%% ----- Gains parameters
+% ---- BODY TILT (thrust input) ----
+GB.u_max   = .5;        % x speed cap (m/s) -- RFP test limit 0.5 m/s
+GB.kpx_pos = 0.635;        % x position -> velocity command gain (1/s)
+GB.kpu = 1.153;  GB.kiu = 0.05969; % x velocity-loop PI gains
+GB.v_max   = .5;        % y
+GB.kpy_pos = 0.635;
+GB.kpv = 1.153;  GB.kiv = 0.05969;
+GB.w_max   = .5;        % z
+GB.kpz_pos = 4.441;
+GB.kpw = 9.992;  GB.kiw = 2.064;
