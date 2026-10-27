@@ -13,7 +13,7 @@ gnRunSeconds = [];                  % [] uses cfg.stopTime for the full mission.
 gnLiveAnimation = true;             % Uses the native UAV Animation block.
 gnPacing = true;                    % Slow execution enough to watch animation.
 gnPacingRate = 5;                   % Simulated seconds per real second (1 = real time).
-gnModelName = 'gncc_uav_toolbox';
+gnModelName = 'gnc_uav_toolbox_DCIntegration';
 gnInitialize = true;                % Run gn_init before each simulation.
 gnShowSearchPath = true;            % Overlay searchW when available.
 gnShowHome = true;                  % Mark cfg.home when available.
@@ -37,11 +37,15 @@ for gnSubfolder = {'functions','scripts','models'}
     end
 end
 
+%% Initialize D&C integrated model
 if gnInitialize
-    assert(exist('gn_init','file')~=0, ...
-        'Cannot find gn_init.m. Save it in the project scripts folder.');
-    gn_init;
+    gnc_init_dcintegration;
 end
+
+% Verify parameter vector before simulation
+fprintf('C dimensions: %dx%d\n', size(C,1), size(C,2));
+assert(isequal(size(C),[25 1]), ...
+    'ERROR: C must be 25x1 before running the integrated model.');
 
 if isempty(gnRunSeconds)
     assert(exist('cfg','var') && isfield(cfg,'stopTime'), ...
@@ -57,6 +61,8 @@ validateattributes(gnPacingRate,{'numeric'}, ...
 % SimulationInput overrides apply to this run without saving model changes.
 % Starting at zero and not loading a saved state gives a fresh test.
 load_system(gnModelName);
+fprintf('C dimensions after loading model: %dx%d\n', ...
+    size(C,1),size(C,2));
 assert(strcmp(get_param(gnModelName,'SimulationStatus'),'stopped'), ...
     'Stop the current simulation before running gn_main.');
 % Name the existing subsystem output wires for reliable data retrieval.
