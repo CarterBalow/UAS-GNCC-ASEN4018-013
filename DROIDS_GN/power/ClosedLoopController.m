@@ -19,6 +19,10 @@ function [Fc, Gc, int_dot, dbg] = ClosedLoopController(var, params, ref)
 %                            v_cmd = sat(ref.vy, v_max)
 %   The PI velocity loop underneath is identical in both modes.
 %
+% Acceleration feedforward (optional, default 0): ref.ax_ff / ref.ay_ff /
+% ref.az_ff (m/s^2, inertial NED) are added to the PI output,
+%   xddot = ax_ff - kpu*(xE_dot - vx_cmd) - kiu*xi_u      (same for y, z)
+%
 % Heading-frame rotation: the inertial x/y accel commands are rotated
 % through psi so the tilt commands stay correct when yaw is not zero:
 %   [ax_H; ay_H] = [cos psi, sin psi; -sin psi, cos psi] * [xddot; yddot]
@@ -69,6 +73,9 @@ if ~isfield(params, 'f_max'), params.f_max = Inf; end   % per-motor thrust limit
 if ~isfield(ref, 'x_mode'), ref.x_mode = 'position'; end
 if ~isfield(ref, 'y_mode'), ref.y_mode = 'position'; end
 if ~isfield(ref, 'z_mode'), ref.z_mode = 'position'; end
+if ~isfield(ref, 'ax_ff'), ref.ax_ff = 0; end
+if ~isfield(ref, 'ay_ff'), ref.ay_ff = 0; end
+if ~isfield(ref, 'az_ff'), ref.az_ff = 0; end
 
 % --- Inertial velocity: V^E = Q_{E/B} * V^B (3-2-1 Euler) ---
 cph = cos(phi); sph = sin(phi);
@@ -85,17 +92,17 @@ tilt_limit = params.att.tilt_lim;
 % --- x: (position -> ) velocity command -> PI ---
 vx_cmd = VelocityCommand(ref.x_mode, ref, 'x', 'vx', ref.kpx_pos, xE, ref.u_max);
 ex_v = xE_dot - vx_cmd;
-xddot_des = -ref.kpu*ex_v - ref.kiu*xi_u;
+xddot_des = ref.ax_ff - ref.kpu*ex_v - ref.kiu*xi_u;
 
 % --- y: (position -> ) velocity command -> PI (mirrors x) ---
 vy_cmd = VelocityCommand(ref.y_mode, ref, 'y', 'vy', ref.kpy_pos, yE, ref.v_max);
 ey_v = yE_dot - vy_cmd;
-yddot_des = -ref.kpv*ey_v - ref.kiv*xi_v;
+yddot_des = ref.ay_ff - ref.kpv*ey_v - ref.kiv*xi_v;
 
 % --- z: (position -> ) climb-rate command -> PI (mirrors x, y) ---
 vz_cmd = VelocityCommand(ref.z_mode, ref, 'z', 'vz', ref.kpz_pos, zE, ref.w_max);
 ez_v = zE_dot - vz_cmd;
-zddot_des = -ref.kpw*ez_v - ref.kiw*xi_z;
+zddot_des = ref.az_ff - ref.kpw*ez_v - ref.kiw*xi_z;
 
 % --- Rotate horizontal accel commands into the heading frame ---
 ax_H =  cps*xddot_des + sps*yddot_des;

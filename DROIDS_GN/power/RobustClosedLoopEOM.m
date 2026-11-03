@@ -1,7 +1,7 @@
 function [x_dot, info] = RobustClosedLoopEOM(t, x, P, ref0, M, wind_NED, meas_noise)
 % RobustClosedLoopEOM - Closed-loop quadrotor flying the mission profile:
 %
-%   mission p,v(t) -> velocity command -> ClosedLoopController (your
+%   mission p,v,a(t) -> velocity command + accel feedforward -> ClosedLoopController (your
 %   body-tilt cascade, unchanged) -> ComputeMotorForces (mixer) ->
 %   saturation [f_min, f_max] -> first-order motor lag -> RobustQuadrotorEOM
 %   (wind/gust drag + CP moment)
@@ -18,7 +18,8 @@ function [x_dot, info] = RobustClosedLoopEOM(t, x, P, ref0, M, wind_NED, meas_no
 % Velocity command per axis (mission tracking, inertial NED):
 %   v_cmd = v_mis(t) + kpos*(p_mis(t) - p_meas)
 % i.e. the mission velocity as feedforward plus your position-loop gain
-% pulling the vehicle back onto the mission path. It is passed to
+% pulling the vehicle back onto the mission path. With ref0.acc_ff = true
+% the mission acceleration a_mis(t) is also fed forward. It is passed to
 % ClosedLoopController in 'velocity' mode, so the PI velocity loop, tilt
 % inversion, thrust law and attitude PID are exactly your existing ones.
 %
@@ -40,11 +41,16 @@ xm = x(1:23);
 xm(1:12) = x12 + meas_noise(:);
 
 % --- Mission tracking -> velocity commands ---
-[p_ref, v_ref] = MissionReference(M, t);
+[p_ref, v_ref, a_ref] = MissionReference(M, t);
 ref = ref0;
 ref.vx = v_ref(1) + ref0.kpx_pos*(p_ref(1) - xm(1));
 ref.vy = v_ref(2) + ref0.kpy_pos*(p_ref(2) - xm(2));
 ref.vz = v_ref(3) + ref0.kpz_pos*(p_ref(3) - xm(3));
+% Acceleration feedforward (ref0.acc_ff): the mission's own acceleration goes
+% straight into the tilt/thrust commands, so the vehicle doesn't lag the path.
+if isfield(ref0, 'acc_ff') && ref0.acc_ff
+    ref.ax_ff = a_ref(1);  ref.ay_ff = a_ref(2);  ref.az_ff = a_ref(3);
+end
 
 % --- Your controller and mixer (unchanged, from quadrotor_gnc 2) ---
 [Fc, Gc, int_dot, dbg] = ClosedLoopController(xm, P, ref);

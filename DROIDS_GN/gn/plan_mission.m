@@ -1,9 +1,13 @@
-function [mission, info, wp_ne_m, wp_type, n_wp] = plan_mission(poly_ne_m, fov_rad, height_m, lane_heading_rad, home_ne_m, v_max_mps, a_max_mps2) %#codegen
+function [mission, info, wp_ne_m, wp_type, n_wp] = plan_mission(poly_ne_m, fov_rad, height_m, lane_heading_rad, home_ne_m, v_max_mps, a_max_mps2, lane_ext_m) %#codegen
 %PLAN_MISSION  One trajectory per flight stage: takeoff, transit, search, return, landing (local NED).
 %   Each stage starts and ends at rest. Evaluate with mission_eval; sequence with mission_sequencer.
 %   mission.T(s) stage durations | mission.p_end(:, s) stage end points | info from search_boustrophedon
+%   lane_ext_m (optional, default 0): lane overrun past the boundary (see search_boustrophedon)
 
-    [wp_ne_m, wp_type, n_wp, info] = search_boustrophedon(poly_ne_m, fov_rad, height_m, lane_heading_rad, home_ne_m);
+    if nargin < 8
+        lane_ext_m = 0;
+    end
+    [wp_ne_m, wp_type, n_wp, info] = search_boustrophedon(poly_ne_m, fov_rad, height_m, lane_heading_rad, home_ne_m, lane_ext_m);
     psi = info.lane_heading_rad;
     if ~isfinite(psi)
         psi = 0;

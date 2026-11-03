@@ -41,6 +41,7 @@ tic;
 [searchW, homeAir, entryPoint, lastPoint, mission, plan] = gn_build_mission(cfg);
 t_ms = 1e3*toc;
 poly_ne_m = plan.aoi_ne_m;
+srch_ne_m = plan.search_ne_m;
 wp = plan.wp_ne_m;
 typ = plan.wp_type;
 n = plan.n_wp;
@@ -76,12 +77,21 @@ fprintf(['status %d | %d lanes | %d cells | heading %.1f deg | start %.2f m from
     info.status, info.n_lanes, info.n_cells, rad2deg(info.lane_heading_rad), d, info.n_transit_outside, ...
     T_end, sum(vecnorm(diff(p, 1, 2))), max(vecnorm(v)), max(vecnorm(a)), t_ms);
 
+% Coverage of the AOI itself by the smoothed search track (camera footprint half-width)
+cov = coverage_check(poly_ne_m, p(1:2, stg == 3), cfg.cameraFootprintWidth/2);
+fprintf(['coverage %.2f%% of AOI | worst-case margin %.2f m (tracking error tolerated before a gap) | ' ...
+    'buffer %.2g m | hardest point [N E] = [%.2f %.2f]\n'], cov.pct, cov.margin_m, cfg.aoiBuffer, cov.worst_ne_m);
+
 wp_plan = [wp(:, 1:n), start_ne_m];
 typ_plan = [typ(1:n), 4];
 fig0 = figure('Name', 'Waypoint Plan', 'NumberTitle', 'off'); hold on; grid on;
 fig0.Theme = 'light';
 plot3(area_lo(2) + [0 area_m area_m 0 0], area_lo(1) + [0 0 area_m area_m 0], zeros(1, 5), 'k-', 'LineWidth', 1, 'DisplayName', 'test area');
 fill3(poly_ne_m(2, :), poly_ne_m(1, :), zeros(1, size(poly_ne_m, 2)), [0.85 0.9 1], 'EdgeColor', 'k', 'DisplayName', 'search area');
+if cfg.aoiBuffer > 0
+    plot3(srch_ne_m(2, [1:end 1]), srch_ne_m(1, [1:end 1]), zeros(1, size(srch_ne_m, 2) + 1), 'k--', ...
+          'DisplayName', sprintf('searched (+%.2g m buffer)', cfg.aoiBuffer));
+end
 plot3(start_ne_m([2 2]), start_ne_m([1 1]), [0 height_m], 'k:', 'LineWidth', 1.5, 'DisplayName', 'takeoff / landing');
 names = {'transit', 'lane', 'connector', 'return'};
 styles = {'r--', 'b-', 'g-', 'm--'};
@@ -112,6 +122,10 @@ fig = figure('Name', 'Smoothed Path', 'NumberTitle', 'off'); hold on; grid on;
 fig.Theme = 'light';
 plot3(area_lo(2) + [0 area_m area_m 0 0], area_lo(1) + [0 0 area_m area_m 0], zeros(1, 5), 'k-', 'LineWidth', 1, 'DisplayName', 'test area');
 fill3(poly_ne_m(2, :), poly_ne_m(1, :), zeros(1, size(poly_ne_m, 2)), [0.85 0.9 1], 'EdgeColor', 'k', 'DisplayName', 'search area');
+if cfg.aoiBuffer > 0
+    plot3(srch_ne_m(2, [1:end 1]), srch_ne_m(1, [1:end 1]), zeros(1, size(srch_ne_m, 2) + 1), 'k--', ...
+          'DisplayName', sprintf('searched (+%.2g m buffer)', cfg.aoiBuffer));
+end
 plot3(wp_ned_m(2, :), wp_ned_m(1, :), -wp_ned_m(3, :), '--', 'Color', [0.6 0.6 0.6], 'DisplayName', 'waypoints');
 plot3(p(2, :), p(1, :), -p(3, :), 'b-', 'LineWidth', 1.5, 'DisplayName', 'smoothed trajectory');
 plot3(p(2, :), p(1, :), zeros(1, K), '-', 'Color', [0.6 0.6 0.6], 'DisplayName', 'ground track');

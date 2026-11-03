@@ -23,9 +23,13 @@ function results = main_motorf_robust(cfg)
 %%   RobustClosedLoopEOM.m  - mission tracking + controller + mixer + motors + plant
 %%   RobustQuadrotorEOM.m   - 12-state EOM with air-relative drag and CP moment
 %%   DrydenGusts.m          - MIL-F-8785C Dryden turbulence, low altitude
-%%   MissionReference.m     - mission position/velocity at time t
+%%   MissionReference.m     - mission position/velocity/acceleration at time t
+%%   eskf16/                - 16-state ESKF (cases with eskf = 'pvt' / 'rtk'):
+%%                            IMU + baro + GPS -> estimate -> controller
 %%   PlotMotorfRobust.m     - figures
 %%   PlotMissionPower.m     - power / energy figure
+%%   PlotMissionTW.m        - thrust-to-weight figure
+%%   PlotNoiseFilter.m      - sensor noise vs. filtered estimate (ESKF cases)
 %%   motor_power.m          - per-motor power from thrust (fit to the sheet)
 %%   Weight and Power.xlsx  - weight / power budget
 %% Outputs go to power/figures/.
@@ -35,7 +39,7 @@ function results = main_motorf_robust(cfg)
 
 this_dir = fileparts(mfilename('fullpath'));
 addpath(fullfile(fileparts(this_dir), 'gn'), fileparts(this_dir));   % planner + mission_params
-addpath(this_dir);                              % this folder first on the path
+addpath(this_dir, fullfile(this_dir, 'eskf16')); % this folder first on the path
 if nargin < 1
     cfg = mission_params();
 end
@@ -59,7 +63,9 @@ PW.AUW  = cfg.mass;  % kg, row of the sheet to use
 W  = cfg.wind;
 W.h = cfg.altitude;  % m, flight altitude AGL
 NS = cfg.noise;
+EK = cfg.eskf;
 CASES = cfg.cases;
+if ~isfield(CASES, 'eskf'), [CASES.eskf] = deal(''); end
 SIM = cfg.psim;
 SIM.v_cap = cfg.ctrl.v_cap;
 SIM.save_png = cfg.run.save_figs;
@@ -153,9 +159,68 @@ for c = 1:numel(CASES)
     X  = zeros(Nt, 27);
     Fa = zeros(Nt, 4);  Fcmd = zeros(Nt, 4);
     Pref = zeros(Nt, 3);  Gc_h = zeros(Nt, 3);
+    Err = zeros(Nt, 12);                        % controller's state minus truth
+
+    use_eskf = ~isempty(C.eskf);
+    if use_eskf
+        % ---- Sensor noise + biases for this run (own seed: repeatable) ----
+        Sx = eskf16_specs(EK.board, C.eskf);
+        gN = [0; 0; P.g];                       % same g as the plant
+        randn('seed', EK.seed);  try, rng(EK.seed); catch, end
+        sg = Sx.sigma_g/sqrt(SIM.dt);  sa = Sx.sigma_a/sqrt(SIM.dt);
+        bg_t = cumsum([EK.bg0, Sx.sigma_bg*sqrt(SIM.dt)*randn(3, Nt-1)], 2);
+        ba_t = cumsum([EK.ba0, Sx.sigma_ba*sqrt(SIM.dt)*randn(3, Nt-1)], 2);
+        bb_t = cumsum([0,      Sx.sigma_bb*sqrt(SIM.dt)*randn(1, Nt-1)], 2);   % baro zeroed at arm
+        n_g  = randn(3, Nt);  n_a = randn(3, Nt);
+        n_gp = Sx.sigma_gps_p.*randn(3, Nt);  n_gv = Sx.sigma_gps_v.*randn(3, Nt);
+        n_b  = Sx.sigma_baro*randn(1, Nt);
+        gps_every  = round(EK.gps_dt/SIM.dt);
+        baro_every = round(EK.baro_dt/SIM.dt);
+        a_lpf = SIM.dt/(SIM.dt + 1/(2*pi*EK.gyro_lpf_hz));   % first-order LPF gain
+
+        % ---- Pre-arm still window: level, at rest at the start point ----
+        Ns = round(EK.t_prearm/SIM.dt);
+        w_st  = EK.bg0 + sg*randn(3, Ns);
+        a_st  = [0; 0; -gN(3)] + EK.ba0 + sa*randn(3, Ns);
+        zp_st = x(1:3) + Sx.sigma_gps_p.*randn(3, numel(1:gps_every:Ns));
+        zb_st = -x(3) + Sx.sigma_baro*randn(1, numel(1:baro_every:Ns));
+        p0 = [mean(zp_st(1:2,:), 2); mean(zp_st(3,:))];
+        if EK.use_baro, p0(3) = -mean(zb_st); end
+        xf = eskf16_init(Sx, mean(a_st, 2), mean(w_st, 2), p0, x(6) + EK.yaw0_err, EK.use_baro);
+        w_f = zeros(3,1);                       % low-passed body rate for the controller
+        wm_prev = [];  am_prev = [];
+        VerrN = zeros(Nt, 3);
+    end
+
     for k = 1:Nt
         wk = wind(k,:).';  nk = noise(k,:).';
+        if use_eskf
+            % IMU sample k-1 held over [t(k-1), t(k)] -> predict to t(k)
+            if k > 1
+                xf = eskf16_predict(xf, wm_prev, am_prev, SIM.dt, Sx, gN);
+            end
+            vN = eskf16_euler2dcm(x(4:6))*x(7:9);
+            if k > 1 && mod(k-1, gps_every) == 0
+                xf = eskf16_update_gps(xf, x(1:3) + n_gp(:,k), vN + n_gv(:,k), Sx);
+            end
+            if EK.use_baro && k > 1 && mod(k-1, baro_every) == 0
+                xf = eskf16_update_baro(xf, -x(3) + bb_t(k) + n_b(k), Sx);
+            end
+            wm_k = x(10:12) + bg_t(:,k) + sg*n_g(:,k);
+            w_f  = w_f + a_lpf*((wm_k - xf.bg) - w_f);           % gyro low-pass
+            nk   = eskf16_to_controller(xf, w_f) - x(1:12);      % estimate held over the step
+            nk(4:6) = atan2(sin(nk(4:6)), cos(nk(4:6)));        % wrap Euler errors
+            VerrN(k,:) = (xf.v - vN).';                          % NED velocity estimate error
+        end
         [k1, info] = RobustClosedLoopEOM(t(k), x, P, ref0, M, wk, nk);
+        if use_eskf
+            % accelerometer = specific force from the EOM: f = vdot + w x v - g_B
+            gB = P.g*[-sin(x(5)); cos(x(5))*sin(x(4)); cos(x(5))*cos(x(4))];
+            fB = k1(7:9) + cross(x(10:12), x(7:9)) - gB;
+            wm_prev = wm_k;
+            am_prev = fB + ba_t(:,k) + sa*n_a(:,k);
+        end
+        Err(k,:) = nk.';
         X(k,:) = x.';
         Fa(k,:) = info.f_act.';  Fcmd(k,:) = info.f_cmd.';
         Pref(k,:) = info.p_ref.';  Gc_h(k,:) = info.Gc.';
@@ -178,7 +243,19 @@ for c = 1:numel(CASES)
     R.name   = C.name;
     R.t = t;  R.X = X;  R.Fa = Fa;  R.Fcmd = Fcmd;  R.Pref = Pref;  R.Gc = Gc_h;
     R.wind = wind;
-    R.f_peak     = max(Fa(:));
+    R.est_err = Err;                            % [pos att velB rate] estimate - truth
+    R.sens = [];
+    if use_eskf
+        % Raw sensor errors (measurement - truth) next to what the filter gives
+        kg = 1 + gps_every:gps_every:Nt;   kb = 1 + baro_every:baro_every:Nt;
+        if ~EK.use_baro, kb = []; end
+        R.sens = struct('mode', C.eskf, ...
+            't_gps', t(kg), 'gps_p', n_gp(:,kg).', 'gps_v', n_gv(:,kg).', ...
+            't_baro', t(kb), 'baro_D', -(bb_t(kb) + n_b(kb)).', ...   % baro height error as a D error
+            'gyro', (bg_t + sg*n_g).', ...                            % raw gyro error (bias + noise)
+            'vel_N', VerrN, 'gyro_lpf_hz', EK.gyro_lpf_hz);
+    end
+    R.f_peak    = max(Fa(:));
     R.f_min      = min(Fa(:));
     R.pct_max    = 100*R.f_peak/P.f_max;
     R.sat_pct    = 100*mean(any(Fcmd > P.f_max | Fcmd < P.f_min, 2));
@@ -213,6 +290,17 @@ for c = 1:numel(results)
 end
 fprintf('\n(df = f_i minus the mean of the four motors at that instant)\n');
 
+%% State-estimate error the controller saw (noise / ESKF cases, t >= 5 s)
+sel = t >= 5;
+for c = 1:numel(results)
+    E = results(c).est_err(sel,:);
+    if ~any(E(:)), continue; end
+    fprintf('\nEstimate error, %s (RMS, t >= 5 s):\n', results(c).name);
+    fprintf('  pos N/E/D  [m]    : %6.3f %6.3f %6.3f\n', sqrt(mean(E(:,1:3).^2)));
+    fprintf('  att r/p/y  [deg]  : %6.2f %6.2f %6.2f\n', rad2deg(sqrt(mean(E(:,4:6).^2))));
+    fprintf('  vel body   [m/s]  : %6.3f %6.3f %6.3f\n', sqrt(mean(E(:,7:9).^2)));
+end
+
 %% Power summary
 fprintf('\nAUW %.1f kg | hover %.0f gf/rotor -> %.0f W (4 motors) + %.0f W avionics | P ~ f^%.3f\n', ...
         PW.AUW, row(2), row(4), PW.avionics, PW.n);
@@ -237,6 +325,12 @@ fig_dir = fullfile(this_dir, 'figures');
 if ~exist(fig_dir, 'dir'), mkdir(fig_dir); end
 PlotMotorfRobust(results, SIM.plot_case, P, M, fig_dir, SIM.save_png);
 PlotMissionPower(results, SIM.plot_case, M, stg, PW, fig_dir, SIM.save_png);
+PlotMissionTW(results, SIM.plot_case, M, stg, P, fig_dir, SIM.save_png);
+if cfg.run.noise_figs
+    for c = 1:numel(results)
+        PlotNoiseFilter(results(c), fig_dir, SIM.save_png);   % ESKF cases only
+    end
+end
 
 Rp = results(SIM.plot_case);
 csv_name = fullfile(fig_dir, 'motor_forces_robust.csv');

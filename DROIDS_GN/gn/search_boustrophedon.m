@@ -1,7 +1,10 @@
-function [wp_ne_m, wp_type, n_wp, info] = search_boustrophedon(poly_ne_m, fov_rad, height_m, lane_heading_rad, start_ne_m) %#codegen
+function [wp_ne_m, wp_type, n_wp, info] = search_boustrophedon(poly_ne_m, fov_rad, height_m, lane_heading_rad, start_ne_m, lane_ext_m) %#codegen
 %SEARCH_BOUSTROPHEDON  Boustrophedon coverage path over a simple polygon (local NED).
 %   poly_ne_m 2xN [N;E] m | fov_rad camera FOV across lanes | height_m AGL
 %   lane_heading_rad from North toward East, NaN = auto | start_ne_m 2x1 [N;E] m
+%   lane_ext_m (optional, default 0) m: every lane runs this far past the boundary
+%   at both ends (connectors shift out with it), so the turn between lanes is
+%   flown outside the polygon instead of cutting its edge. Use the turn radius.
 %   wp_type: 0 start, 1 transit, 2 lane, 3 connector
 %   info.status: 0 ok, 1 bad input, 2 not simple, 3 buffer too small, 4 internal
 
@@ -9,6 +12,10 @@ function [wp_ne_m, wp_type, n_wp, info] = search_boustrophedon(poly_ne_m, fov_ra
     P.max_segs_per_lane = 8;
     P.max_wp            = 1024;
     P.geom_tol_m        = 1e-9;
+    P.lane_ext_m        = 0;
+    if nargin >= 6 && lane_ext_m > 0
+        P.lane_ext_m = lane_ext_m;
+    end
 
     lane_spacing_m = 1.8 * height_m * tan(fov_rad / 2);
 
@@ -54,6 +61,7 @@ function [wp, typ, n, info] = plan_one(poly, d, psi, p0, P)
     % Build the full coverage path for one fixed lane heading.
     N   = size(poly, 2);
     tol = P.geom_tol_m;
+    ext = P.lane_ext_m;
     ML  = P.max_lanes;
     MS  = P.max_segs_per_lane;
     MC  = MS * ML;
@@ -163,7 +171,7 @@ function [wp, typ, n, info] = plan_one(poly, d, psi, p0, P)
                 if endIdx == 1, k = cellK0(c); else, k = cellK1(c); end
                 q = find_index(cellOf(:, k), nSeg(k), c);
                 for side = 1:2
-                    p = lane_point(segLo(q, k), segHi(q, k), side, tl(k), u, w);
+                    p = lane_point(segLo(q, k), segHi(q, k), side, tl(k), u, w, ext);
                     if norm(p - cur) < bestD
                         bestD = norm(p - cur);  bc = c;  bk = k;  bside = side;
                     end
@@ -179,14 +187,14 @@ function [wp, typ, n, info] = plan_one(poly, d, psi, p0, P)
         k = bk;
         side = bside;
         q = find_index(cellOf(:, k), nSeg(k), bc);
-        pIn = lane_point(segLo(q, k), segHi(q, k), side, tl(k), u, w);
+        pIn = lane_point(segLo(q, k), segHi(q, k), side, tl(k), u, w, ext);
         if iter > 1 && leaves_polygon(cur, pIn, poly, tol)
             nOut = nOut + 1;
         end
         [wp, typ, n, ok1] = emit(wp, typ, n, pIn, 1, tol);  ok = ok && ok1;
         while ok
             side = 3 - side;
-            [wp, typ, n, ok1] = emit(wp, typ, n, lane_point(segLo(q, k), segHi(q, k), side, tl(k), u, w), 2, tol);
+            [wp, typ, n, ok1] = emit(wp, typ, n, lane_point(segLo(q, k), segHi(q, k), side, tl(k), u, w, ext), 2, tol);
             ok = ok && ok1;
             if k == kEnd
                 break
@@ -194,12 +202,13 @@ function [wp, typ, n, info] = plan_one(poly, d, psi, p0, P)
             if side == 1, e0 = eLo(q, k); else, e0 = eHi(q, k); end
             [nv, vidx, ~, ~] = walk_chain(t, e0, tl(k), tl(k + dk));
             for i = 1:nv
-                [wp, typ, n, ok1] = emit(wp, typ, n, poly(:, vidx(i)), 3, tol);
+                % connector vertex, shifted outward with the lane end it follows
+                [wp, typ, n, ok1] = emit(wp, typ, n, poly(:, vidx(i)) + (2*side - 3)*ext*u, 3, tol);
                 ok = ok && ok1;
             end
             k = k + dk;
             q = find_index(cellOf(:, k), nSeg(k), bc);
-            [wp, typ, n, ok1] = emit(wp, typ, n, lane_point(segLo(q, k), segHi(q, k), side, tl(k), u, w), 3, tol);
+            [wp, typ, n, ok1] = emit(wp, typ, n, lane_point(segLo(q, k), segHi(q, k), side, tl(k), u, w, ext), 3, tol);
             ok = ok && ok1;
         end
         if ~ok
@@ -274,9 +283,10 @@ function idx = find_index(col, nUsed, val)
 end
 
 
-function p = lane_point(sLo, sHi, side, tline, u, w)
-    % Convert a lane endpoint from sweep coordinates back to [N; E].
-    if side == 1, sv = sLo; else, sv = sHi; end
+function p = lane_point(sLo, sHi, side, tline, u, w, ext)
+    % Convert a lane endpoint from sweep coordinates back to [N; E],
+    % extended ext past the boundary along the lane.
+    if side == 1, sv = sLo - ext; else, sv = sHi + ext; end
     p = sv * u + tline * w;
 end
 

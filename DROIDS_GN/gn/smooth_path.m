@@ -58,6 +58,10 @@ function traj = smooth_path(wp_ned_m, n_wp, stop_wp, v_max_mps, a_max_mps2, psi_
 
     r_des = v_max_mps^2 / a_max_mps2;
     r_min = r_des / 4;
+    % Corners sharper than th_bulb get a bulb turn that starts AT the corner
+    % (loops outside it), even when an inside arc would fit: an inside arc cuts
+    % r*tan(th/2) off both legs, ~4 m at a 165 deg hairpin, which skips search lane.
+    th_bulb = 2*atan(2);              % 126.9 deg: inside arcs cut at most 2*r_des
     a = a_max_mps2;
 
     % merge adjacent corners whose arcs do not fit between them
@@ -72,7 +76,7 @@ function traj = smooth_path(wp_ned_m, n_wp, stop_wp, v_max_mps, a_max_mps2, psi_
             d1 = unitv(q(:, j+1) - q(:, j));
             d2 = unitv(q(:, j+2) - q(:, j+1));
             L = norm(q(:, j+1) - q(:, j));
-            if L >= corner_need(turn_angle(d0, d1), r_des) + corner_need(turn_angle(d1, d2), r_des)
+            if L >= corner_need(turn_angle(d0, d1), r_des, th_bulb) + corner_need(turn_angle(d1, d2), r_des, th_bulb)
                 continue
             end
             X = q(:, j);
@@ -124,7 +128,7 @@ function traj = smooth_path(wp_ned_m, n_wp, stop_wp, v_max_mps, a_max_mps2, psi_
         if ~sq(i)
             th(i) = turn_angle(dseg(:, i-1), dseg(:, i));
             ysd(:, i) = turn_side(dseg(:, i-1), dseg(:, i));
-            need(i) = corner_need(th(i), r_des);
+            need(i) = corner_need(th(i), r_des, th_bulb);
         end
     end
     availL = zeros(1, M);
@@ -168,7 +172,10 @@ function traj = smooth_path(wp_ned_m, n_wp, stop_wp, v_max_mps, a_max_mps2, psi_
         elseif th(i) >= 1e-6
             La = min(availL(i), availR(i));
             tn = tan(th(i)/2);
-            if La >= need(i)
+            if th(i) > th_bulb                 % sharp: bulb from the corner itself
+                kind(i) = 2;  rc(i) = r_des;  Lt(i) = 0;
+                phi(i) = pi - th(i)/2 - asin(min(1, sin(th(i)/2)/2));
+            elseif La >= need(i)
                 kind(i) = 1;  rc(i) = r_des;  Lt(i) = need(i);
             elseif th(i) <= pi/2 || (th(i) < pi - 1e-6 && La >= r_min*tn)
                 kind(i) = 1;  rc(i) = La / tn;  Lt(i) = La;
@@ -327,12 +334,11 @@ function th = turn_angle(din, dout)
     th = acos(max(-1, min(1, dot(din, dout))));
 end
 
-% Straight length an inside arc of radius r needs on each side of the corner.
-function L = corner_need(th, r)
-    if th < 1e-6
+% Straight length an inside arc of radius r needs on each side of the corner
+% (0 above th_bulb: those corners get a bulb turn that starts at the corner).
+function L = corner_need(th, r, th_bulb)
+    if th < 1e-6 || th > th_bulb
         L = 0;
-    elseif th > pi - 1e-6
-        L = inf;
     else
         L = r * tan(th/2);
     end
