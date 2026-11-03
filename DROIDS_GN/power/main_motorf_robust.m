@@ -12,7 +12,7 @@ function results = main_motorf_robust(cfg)
 %%
 %% Several cases are run back to back on the SAME mission so you can see
 %% what each effect adds to the motor forces (e.g. ideal vs. wind+gusts vs.
-%% wind+gusts+sensor noise). Edit everything in the SETTINGS block.
+%% wind+gusts+sensor noise). Edit settings in ../mission_params.m.
 %%
 %% Mission comes from the DROIDS_GN planner (gn_init cfg -> gn_build_mission),
 %% and the motor forces are turned into electrical power with the 3.2 kg row
@@ -30,96 +30,39 @@ function results = main_motorf_robust(cfg)
 %%   Weight and Power.xlsx  - weight / power budget
 %% Outputs go to power/figures/.
 %%
-%% Call with no input to use gn_init's cfg, or pass cfg (e.g. from
-%% test_search_boustrophedon) to fly that mission.
+%% All inputs are in ../mission_params.m. Call with no input to use it
+%% directly, or pass cfg (e.g. from run_mission) to fly that mission.
 
 this_dir = fileparts(mfilename('fullpath'));
-addpath(fullfile(fileparts(this_dir), 'gn'));   % planner (gn_init, gn_build_mission)
-if nargin < 1
-    gn_init;                                    % -> cfg
-end
+addpath(fullfile(fileparts(this_dir), 'gn'), fileparts(this_dir));   % planner + mission_params
 addpath(this_dir);                              % this folder first on the path
-
-%% ============================ SETTINGS =================================
-
-%% --- Vehicle + body-tilt gains (run_all_designs.m SETTINGS) ---
-P.g  = 9.81;
-P.m  = 3.2;          % kg, AUW (Weight and Power.xlsx row used below)
-P.Ix = .0045813;     % inertias still from the lighter run_all_designs vehicle
-P.Iy = .0045833;
-P.Iz = .0080147;
-P.I  = diag([P.Ix; P.Iy; P.Iz]);
-P.d  = .18785;       % arm length (m)
-P.km = 0.0045;       % motor torque constant
-P.mu = 2e-6;
-
-GB.u_max   = .5;
-GB.kpx_pos = 0.635;
-GB.kpu = 1.153;  GB.kiu = 0.05969;
-GB.v_max   = .5;
-GB.kpy_pos = 0.635;
-GB.kpv = 1.153;  GB.kiv = 0.05969;
-GB.w_max   = .5;
-GB.kpz_pos = 4.441;
-GB.kpw = 9.992;  GB.kiw = 2.064;
-
-%% --- Power: Weight and Power.xlsx, Sheet3 ---
-PW.xlsx = fullfile(this_dir, 'Weight and Power.xlsx');
-PW.AUW  = P.m;       % kg, row of the sheet to use
-
-%% --- Motor: EMAX ECO III (E3) 2807 1300KV, AVIA 7035 3-blade, 6S ---
-P.f_max = 22.4;      % N, full-throttle thrust (2290 g)
-P.f_min = 0;         % N, motors can't push down
-P.kT    = 3.27e-6;   % N/(rad/s)^2, fit of f = kT*Omega^2 to the thrust table
-P.tau_m = 0.04;      % s, motor+prop spin-up time constant (ASSUMED, 7" prop)
-
-%% --- Aerodynamics ---
-AERO.use_run_all_drag = false;  % true: keep nu from run_all_designs.m
-AERO.rho  = 1.03;    % kg/m^3, air density at ~1650 m (Boulder)
-AERO.Cd   = 1.0;     % body drag coefficient (ASSUMED, bluff frame)
-AERO.area = 0.04;    % m^2, frontal area (ASSUMED -- measure from CAD)
-P.r_cp    = [0; 0; -0.02];   % m, center of pressure rel. to CG, body FRD
-                             % (ASSUMED: 2 cm above CG; drag x r_cp = moment)
-if ~AERO.use_run_all_drag
-    P.nu = 0.5*AERO.rho*AERO.Cd*AERO.area;   % N/(m/s)^2
-else
-    P.nu = 1.0e-3;
+if nargin < 1
+    cfg = mission_params();
 end
 
-%% --- Wind (applies to cases with wind = true) ---
-W.speed  = 3;        % m/s, mean wind speed
-W.to_deg = 90;       % deg, heading the wind blows TOWARD (90 = blowing east)
-W.W20    = 5;        % m/s, Dryden intensity parameter (wind at 20 ft):
-                     %   ~7.7 light, ~15 moderate, ~23 severe (MIL-F-8785C)
-W.h      = cfg.altitude;   % m, flight altitude AGL (mission height)
-W.seed   = 1;        % random seed (repeatable gusts)
+%% Parameters (all set in ../mission_params.m)
+P = cfg.drone;
+P.m  = cfg.mass;
+P.g  = cfg.g;
+P.I  = diag([P.Ix; P.Iy; P.Iz]);
+P.f_max = cfg.motor.f_max;
+P.f_min = cfg.motor.f_min;
+P.kT    = cfg.motor.kT;
+P.tau_m = cfg.motor.tau_m;
+P.nu    = 0.5*cfg.aero.rho*cfg.aero.Cd*cfg.aero.area;   % N/(m/s)^2
+P.r_cp  = cfg.aero.r_cp;
+P.att   = cfg.att;
 
-%% --- Sensor / estimate noise (applies to cases with noise = true) ---
-% Each channel is first-order colored noise: 1-sigma value, plus a
-% correlation time ~ 1/bandwidth of that signal coming out of the
-% estimator/filters (white 250 Hz noise on position would be unrealistic
-% and would be amplified straight into thrust by the z gains).
-NS.pos  = 0.05;          NS.tau_pos  = 0.5;    % m,     s  (position estimate)
-NS.att  = deg2rad(0.3);  NS.tau_att  = 0.1;    % rad,   s  (attitude estimate)
-NS.vel  = 0.05;          NS.tau_vel  = 0.2;    % m/s,   s  (velocity estimate)
-NS.rate = deg2rad(0.5);  NS.tau_rate = 0.01;   % rad/s, s  (gyro after ~16 Hz LPF)
-NS.seed = 2;
-
-%% --- Cases to run (same mission, same gusts, same noise) ---
-CASES = struct( ...
-  'name',  {'Ideal',  'Wind + gusts', 'Wind + gusts + noise'}, ...
-  'wind',  {false,    true,           true}, ...
-  'noise', {false,    false,          true});
-
-%% --- Simulation ---
-SIM.dt    = 0.004;   % s, fixed-step RK4 (250 Hz, like a flight controller)
-SIM.t_end = Inf;     % s, Inf = whole mission; shorten for quick tests
-SIM.v_cap = 1.0;     % m/s, velocity-command cap (mission is 0.5 m/s; the
-                     % extra room lets the position loop correct drift)
-SIM.plot_case = numel(CASES);   % which case gets the detailed figures
-SIM.save_png  = true;
-
-%% =======================================================================
+GB = cfg.ctrl;
+PW.xlsx = cfg.power.xlsx;
+PW.AUW  = cfg.mass;  % kg, row of the sheet to use
+W  = cfg.wind;
+W.h = cfg.altitude;  % m, flight altitude AGL
+NS = cfg.noise;
+CASES = cfg.cases;
+SIM = cfg.psim;
+SIM.v_cap = cfg.ctrl.v_cap;
+SIM.save_png = cfg.run.save_figs;
 
 %% Mission profile from the planner, sampled at the controller rate
 M.stage_names = {'takeoff', 'transit', 'search', 'return', 'landing'};
@@ -145,6 +88,9 @@ M.stage = M.stage(1:k);
 pw  = readcell(PW.xlsx, 'Sheet', 'Sheet3');
 tab = cell2mat(pw(6:end, 1:6));
 row = tab(abs(tab(:,1) - PW.AUW) < 1e-6, :);
+if isempty(row)
+    error('main_motorf_robust:AUW', 'cfg.mass = %g kg is not a row of %s (Sheet3)', PW.AUW, PW.xlsx);
+end
 PW.f_hover   = row(2)*9.80665e-3;             % N per rotor
 PW.P_hover   = row(4)/4;                      % W per motor
 PW.n         = log(row(5)/row(4))/log(row(3)/row(2));

@@ -1,16 +1,13 @@
 % Mission run: gn_init config -> boustrophedon search -> smoothed flight stages -> plots.
 clear; clc; close all;
 
-random_aoi = true;      % true: random polygon in a 30x30 m area; false: gn_init AOI rectangle
-run_simulink = false;   % true: also run gncc_uav_toolbox and overlay the flown path
-run_power = true;      % true: also run power/main_motorf_robust on this mission (motor forces + power draw)
-area_m = 30;
-min_size_m = 5;
-start_dist_m = [10 20];
-z_exag = 4;
-
 addpath(fullfile(fileparts(mfilename('fullpath')), 'gn'));
-gn_init;
+gn_init;                     % -> cfg (inputs: mission_params.m)
+random_aoi = cfg.run.random_aoi;
+area_m = cfg.run.area_m;
+min_size_m = cfg.run.min_size_m;
+start_dist_m = cfg.run.start_dist_m;
+z_exag = cfg.run.z_exag;
 height_m = cfg.altitude;
 v_max_mps = cfg.vNom;
 a_max_mps2 = cfg.aNom;
@@ -81,7 +78,7 @@ fprintf(['status %d | %d lanes | %d cells | heading %.1f deg | start %.2f m from
 
 wp_plan = [wp(:, 1:n), start_ne_m];
 typ_plan = [typ(1:n), 4];
-fig0 = figure(); hold on; grid on;
+fig0 = figure('Name', 'Waypoint Plan', 'NumberTitle', 'off'); hold on; grid on;
 fig0.Theme = 'light';
 plot3(area_lo(2) + [0 area_m area_m 0 0], area_lo(1) + [0 0 area_m area_m 0], zeros(1, 5), 'k-', 'LineWidth', 1, 'DisplayName', 'test area');
 fill3(poly_ne_m(2, :), poly_ne_m(1, :), zeros(1, size(poly_ne_m, 2)), [0.85 0.9 1], 'EdgeColor', 'k', 'DisplayName', 'search area');
@@ -111,7 +108,7 @@ title({'Waypoint plan (unsmoothed)', sprintf('3D (E, N, up), z x%d | FOV %.0f de
     z_exag, cfg.cameraCrossTrackFOV, 100*cfg.cameraLaneOverlap, height_m, cfg.laneSpacing)});
 legend('Location', 'bestoutside');
 
-fig = figure(); hold on; grid on;
+fig = figure('Name', 'Smoothed Path', 'NumberTitle', 'off'); hold on; grid on;
 fig.Theme = 'light';
 plot3(area_lo(2) + [0 area_m area_m 0 0], area_lo(1) + [0 0 area_m area_m 0], zeros(1, 5), 'k-', 'LineWidth', 1, 'DisplayName', 'test area');
 fill3(poly_ne_m(2, :), poly_ne_m(1, :), zeros(1, size(poly_ne_m, 2)), [0.85 0.9 1], 'EdgeColor', 'k', 'DisplayName', 'search area');
@@ -128,7 +125,7 @@ legend('Location', 'bestoutside');
 
 stage_names = {'takeoff', 'transit', 'search', 'return', 'landing'};
 stage_colors = [0.5 0.5 0.5; 1 0 0; 0 0 1; 1 0 1; 0.2 0.2 0.2];
-fig2 = figure();
+fig2 = figure('Name', 'Speed & Accel', 'NumberTitle', 'off');
 fig2.Theme = 'light';
 for sp = 1:2
     subplot(2, 1, sp); hold on; grid on;
@@ -158,7 +155,7 @@ end
 
 axis_names = {'x (N)', 'y (E)', 'z (D)'};
 axis_colors = [0 0.45 0.74; 0.85 0.33 0.1; 0.47 0.67 0.19];
-fig3 = figure();
+fig3 = figure('Name', 'NED Vel & Accel', 'NumberTitle', 'off');
 fig3.Theme = 'light';
 for sp = 1:2
     subplot(2, 1, sp); hold on; grid on;
@@ -186,7 +183,7 @@ for sp = 1:2
     legend('Location', 'eastoutside');
 end
 
-if run_simulink
+if cfg.run.simulink
     out = sim('gncc_uav_toolbox', 'StopTime', num2str(T_end + 60));
     ph = out.phaseLog;
     t_done = ph.Time(find(squeeze(ph.Data) == 6, 1));
@@ -201,7 +198,17 @@ if run_simulink
     end
 end
 
-if run_power
+if cfg.run.save_figs
+    fig_dir = fullfile(fileparts(mfilename('fullpath')), 'gn', 'figures');
+    figs = [fig0, fig, fig2, fig3];
+    files = {'waypoint_plan.png', 'smoothed_path.png', 'speed_accel.png', 'ned_vel_accel.png'};
+    for k = 1:numel(figs)
+        figure(figs(k));
+        SaveCurrentFigure(fig_dir, files{k});
+    end
+end
+
+if cfg.run.power
     power_results = main_motorf_robust(cfg);
 end
 

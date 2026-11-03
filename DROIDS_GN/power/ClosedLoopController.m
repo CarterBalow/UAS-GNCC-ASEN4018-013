@@ -80,7 +80,7 @@ Q_EB = [cth*cps, sph*sth*cps - cph*sps, cph*sth*cps + sph*sps;
 VE = Q_EB * [uB; vB; wB];
 xE_dot = VE(1); yE_dot = VE(2); zE_dot = VE(3);
 
-tilt_limit = deg2rad(30);
+tilt_limit = params.att.tilt_lim;
 
 % --- x: (position -> ) velocity command -> PI ---
 vx_cmd = VelocityCommand(ref.x_mode, ref, 'x', 'vx', ref.kpx_pos, xE, ref.u_max);
@@ -122,30 +122,14 @@ int_u = ex_v * ~x_sat;
 int_v = ey_v * ~y_sat;
 int_z = ez_v * ~z_sat;
 
-% --- Inner loop: roll/pitch PID (pole placement, unchanged) ---
-T1 = .5; T2 = .05; T3 = 1;
-l1 = -1/T1; l2 = -1/T2; l3 = -1/T3;
+% --- Inner loop: roll/pitch PID (pole placement, gains in mission_params) ---
+A = params.att;
+kp_roll  = A.kp_roll;   kd_roll  = A.kd_roll;   ki_roll  = A.ki_roll;
+kp_pitch = A.kp_pitch;  kd_pitch = A.kd_pitch;  ki_pitch = A.ki_pitch;
 
-% kp_roll  = Ix*(l1*l2 + l1*l3 + l2*l3);
-% kd_roll  = -Ix*(l1 + l2 + l3);
-% ki_roll  = -Ix*l1*l2*l3;
-% 
-% kp_pitch = Iy*(l1*l2 + l1*l3 + l2*l3);
-% kd_pitch = -Iy*(l1 + l2 + l3);
-% ki_pitch = -Iy*l1*l2*l3;
-
-kp_roll  = .1193937;
-kd_roll  = .02112067;
-ki_roll  = .02566814;
-
-kp_pitch = .1193937;
-kd_pitch = .02112067;
-ki_pitch = .02566814;
-
-% --- Yaw angle hold: Iz*s^2 + kd*s + kp, poles at -1/Tpsi1, -1/Tpsi2 ---
-Tpsi1 = 0.5; Tpsi2 = 0.2;
-kp_yaw = Iz*(1/Tpsi1)*(1/Tpsi2);
-kd_yaw = Iz*(1/Tpsi1 + 1/Tpsi2);
+% --- Yaw angle hold: Iz*s^2 + kd*s + kp, poles at -1/Tpsi(1), -1/Tpsi(2) ---
+kp_yaw = Iz/(A.Tpsi(1)*A.Tpsi(2));
+kd_yaw = Iz*(1/A.Tpsi(1) + 1/A.Tpsi(2));
 
 phi_err   = phi   - phi_ref;
 theta_err = theta - theta_ref;

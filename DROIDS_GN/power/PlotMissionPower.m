@@ -7,7 +7,7 @@ t_stage = [arrayfun(@(s) t(find(stg == s, 1)), 1:5), M.t(end)];
 stage_colors = [0.5 0.5 0.5; 1 0 0; 0 0 1; 1 0 1; 0.2 0.2 0.2];
 Rp = results(ic);
 
-figure('Name', 'Mission power', 'NumberTitle', 'off');
+figure('Name', 'Power Draw', 'NumberTitle', 'off');
 for sp = 1:3
     subplot(3, 1, sp); hold on; grid on;
     xlim([0 t(end)]);
@@ -31,13 +31,18 @@ for sp = 1:3
         legend([repmat({''}, 1, 5), {'P_1', 'P_2', 'P_3', 'P_4', 'hover'}], 'Location', 'eastoutside');
         title(['Per-motor power - ' Rp.name]);
     else
+        % Hover dominates, so every case's E(t) is a near-identical straight
+        % line; plot the extra energy each case uses over Ideal instead.
+        E0 = results(1).E_Wh;
         for c = numel(results):-1:1
-            plot(t, results(c).E_Wh, 'LineWidth', 1.1, 'DisplayName', results(c).name);
+            plot(t, results(c).E_Wh - E0, 'LineWidth', 1.1, 'DisplayName', ...
+                 sprintf('%s (%.2f Wh)', results(c).name, results(c).E_Wh(end)));
         end
-        ylabel('Energy used [Wh]'); xlabel('Time [s]');
-        title(sprintf('Cumulative energy (usable battery %.0f Wh)', PW.E_batt_Wh));
+        ylabel(['\DeltaE vs ' results(1).name ' [Wh]']); xlabel('Time [s]');
+        title(sprintf('Extra energy over %s (%.2f Wh total, usable battery %.0f Wh)', ...
+              results(1).name, E0(end), PW.E_batt_Wh));
         legend('Location', 'eastoutside');
     end
 end
-if save_png, SaveCurrentFigure(fig_dir, 'mission_power.png'); end
+if save_png, SaveCurrentFigure(fig_dir, 'power_draw.png'); end
 end

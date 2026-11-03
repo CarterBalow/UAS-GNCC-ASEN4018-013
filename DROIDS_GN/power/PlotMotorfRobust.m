@@ -15,10 +15,9 @@ function PlotMotorfRobust(results, ic, P, M, fig_dir, save_png)
 R = results(ic);
 t = R.t;
 hover_f = P.m*P.g/4;
-tag = lower(regexprep(R.name, '[^A-Za-z0-9]+', '_'));
 
 %% 1) Motor forces
-figure('Name', ['Motor forces - ' R.name], 'NumberTitle', 'off');
+figure('Name', 'Motor Forces', 'NumberTitle', 'off');
 ax(1) = subplot(4,1,1);
 plot(t, R.Fa); hold on; plot(t([1 end]), hover_f*[1 1], 'k:');
 ylabel('f_i [N]'); legend('f_1','f_2','f_3','f_4','hover','Location','northeast','Orientation','horizontal');
@@ -37,10 +36,10 @@ plot(t, R.wind);
 ylabel('[m/s]'); xlabel('t [s]'); legend('w_N','w_E','w_D','Location','northeast','Orientation','horizontal'); grid on;
 title('Wind (mean + gust)');
 linkaxes(ax, 'x');  xlim(ax(1), t([1 end]));
-if save_png, SaveCurrentFigure(fig_dir, ['motor_forces_' tag '.png']); end
+if save_png, SaveCurrentFigure(fig_dir, 'motor_forces.png'); end
 
 %% 2) Mission tracking
-figure('Name', ['Mission tracking - ' R.name], 'NumberTitle', 'off');
+figure('Name', 'Tracking', 'NumberTitle', 'off');
 subplot(2,2,[1 3]);
 plot(R.Pref(:,2), R.Pref(:,1), 'k--'); hold on;
 plot(R.X(:,2), R.X(:,1), 'b');
@@ -55,10 +54,10 @@ plot(t, -R.X(:,3), 'b', t, -R.Pref(:,3), 'k--'); grid on;
 ylabel('altitude [m]'); xlabel('t [s]'); legend('flown','mission','Location','best');
 title('Altitude');
 linkaxes(bx, 'x');  xlim(bx(1), t([1 end]));
-if save_png, SaveCurrentFigure(fig_dir, ['tracking_' tag '.png']); end
+if save_png, SaveCurrentFigure(fig_dir, 'tracking.png'); end
 
 %% 3) Case comparison
-figure('Name', 'Motor forces - case comparison', 'NumberTitle', 'off');
+figure('Name', 'Case Comparison', 'NumberTitle', 'off');
 nc = numel(results);
 subplot(2,1,1); hold on;
 for c = 1:nc

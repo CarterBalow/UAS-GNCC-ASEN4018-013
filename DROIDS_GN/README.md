@@ -13,17 +13,17 @@ All coordinates are local NED (North, East, Down). Units are SI: m, s, rad.
 | What | How |
 |---|---|
 | Plan a mission and plot it | Run `run_mission` |
-| Also run the Simulink model | Set `run_simulink = true` in `run_mission` |
-| Also compute power draw | Set `run_power = true` in `run_mission` |
+| Also run the Simulink model | Set `cfg.run.simulink = true` in `mission_params` |
+| Also compute power draw | Set `cfg.run.power = true` in `mission_params` |
 | Power analysis by itself | `addpath power; main_motorf_robust` |
-| Use a random AOI | Set `random_aoi = true` in `run_mission` |
+| Use a random AOI | Set `cfg.run.random_aoi = true` in `mission_params` |
 
-To change the mission, edit `gn/gn_init.m`. It sets the AOI, altitude, speeds, and camera FOV and overlap. To use any polygon as the AOI, set `cfg.aoiPoly`, a 2xN array of [N; E] points.
+All inputs live in `mission_params.m`: run options, location/AOI, drone, flight profile, camera, guidance, timing, controller gains, power, wind, noise, and power-sim cases. To use any polygon as the AOI, set `cfg.aoiPoly`, a 2xN array of [N; E] points.
 
 ## How the pieces connect
 
 ```
-gn_init (cfg)
+mission_params -> gn_init (cfg)
   └─ gn_build_mission(cfg)
        └─ plan_mission
             ├─ search_boustrophedon    lane waypoints over the AOI
@@ -50,13 +50,14 @@ DROIDS_GN/
 | File | Purpose |
 |---|---|
 | `run_mission.m` | Main script. Plans the mission and prints a summary. Plots the 3D plan, the smoothed path, and speed/acceleration by stage. Can also run Simulink and/or the power analysis. |
+| `mission_params.m` | Every input, returned as `cfg`. Flat fields feed the planner and Simulink; grouped structs (`cfg.drone`, `cfg.wind`, ...) feed the power analysis. |
 | `gncc_uav_toolbox.slx` | Simulink model (UAV Toolbox multirotor) that flies the mission. Run `gn_init` first. |
 
 ## Files: mission planning (`gn/`)
 
 | File | Purpose |
 |---|---|
-| `gn_init.m` | Script. Adds `gn/` and `power/` to the path, then builds `cfg` (AOI, altitude, speeds, camera FOV/overlap → lane spacing, sample times, gains). Calls `gn_build_mission` and defines the Simulink bus objects. Run it before the Simulink model. |
+| `gn_init.m` | Script. Adds `gn/` and `power/` to the path, then loads `cfg` from `mission_params`. Calls `gn_build_mission` and defines the Simulink bus objects. Run it before the Simulink model. |
 | `gn_build_mission.m` | Turns `cfg` into the mission. Returns the search waypoints, key points (home in the air, search entry, last search point), the `mission` struct, and the raw planner output. |
 | `plan_mission.m` | Builds one smoothed trajectory per flight stage. Each stage starts and ends at rest. |
 | `search_boustrophedon.m` | Coverage path over a simple polygon. Lane spacing comes from the camera footprint. The lane heading is chosen automatically (or set manually), and transits go around the area when needed. |
@@ -80,7 +81,7 @@ The motor forces from each case are then converted to electrical power.
 
 | File | Purpose |
 |---|---|
-| `main_motorf_robust.m` | Driver: `results = main_motorf_robust(cfg)`. With no input, it uses `gn_init`. Settings are at the top: vehicle, gains, motor, aero, wind, noise, cases. Prints force and power tables and writes figures plus a CSV to `power/figures/`. |
+| `main_motorf_robust.m` | Driver: `results = main_motorf_robust(cfg)`. With no input, it uses `mission_params`. Prints force and power tables and writes figures plus a CSV to `power/figures/`. |
 | `RobustClosedLoopEOM.m` | One state derivative. Covers mission tracking, controller, mixer, motor saturation and lag, and the plant. |
 | `RobustQuadrotorEOM.m` | 12-state nonlinear EOM with air-relative drag and a center-of-pressure moment. |
 | `ClosedLoopController.m` | Body-tilt cascade: position → velocity PI → attitude → force and moment commands. |
